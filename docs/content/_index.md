@@ -6,13 +6,12 @@ title: "gomarklint"
 
 [![Test](https://github.com/shinagawa-web/gomarklint/actions/workflows/test.yml/badge.svg)](https://github.com/shinagawa-web/gomarklint/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/shinagawa-web/gomarklint/graph/badge.svg?token=5MGCYZZY7S)](https://codecov.io/gh/shinagawa-web/gomarklint)
-[![Go Report Card](https://goreportcard.com/badge/github.com/shinagawa-web/gomarklint)](https://goreportcard.com/report/github.com/shinagawa-web/gomarklint)
 [![Go Reference](https://pkg.go.dev/badge/github.com/shinagawa-web/gomarklint.svg)](https://pkg.go.dev/github.com/shinagawa-web/gomarklint)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/shinagawa-web/gomarklint/blob/main/LICENSE)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/shinagawa-web/gomarklint/badge)](https://securityscorecards.dev/viewer/?uri=github.com/shinagawa-web/gomarklint)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12970/badge)](https://www.bestpractices.dev/projects/12970)
 
-<a href="https://gyazo.com/a5f8265a0865e5a37dc83733ca61069a"><img src="https://i.gyazo.com/a5f8265a0865e5a37dc83733ca61069a.gif" width="800" alt="Demo"></a>
+<img src="demo.gif" width="800" alt="gomarklint catching a broken link and structure issues">
 
 > Catch broken links before your readers do.
 > A fast Markdown checker built in Go — validates internal anchors by default, external URLs when enabled, and enforces structure for local dev and CI alike.

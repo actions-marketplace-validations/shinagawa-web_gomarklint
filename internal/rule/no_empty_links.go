@@ -3,18 +3,14 @@ package rule
 import (
 	"fmt"
 	"strings"
+
+	"github.com/shinagawa-web/gomarklint/v3/internal/preprocess"
 )
 
-// emptyLinkDest reports whether dest is an "empty" link destination.
-// Empty means literally empty, a lone fragment "#", or angle-bracket-wrapped
-// empty "<>".
 func emptyLinkDest(dest string) bool {
 	return dest == "" || dest == "#" || dest == "<>"
 }
 
-// findEmptyLinks scans a single line (already stripped of inline code) for
-// Markdown links or images whose destination is empty.
-// It returns the raw matched text for each violation (e.g. "[text]()").
 func findEmptyLinks(line string) []string {
 	var results []string
 	pos := 0
@@ -54,46 +50,20 @@ func findEmptyLinks(line string) []string {
 	return results
 }
 
-// CheckNoEmptyLinks flags Markdown links and images whose destination URL is
-// empty, contains only "#", or is "<>".
-// Links inside fenced code blocks and inline code spans are ignored.
-func CheckNoEmptyLinks(filename string, lines []string, offset int) []LintError {
+func CheckNoEmptyLinks(filename string, ctx *preprocess.Context, offset int) []LintError {
 	var errs []LintError
-	inBlock := false
-	fenceMarker := ""
 
-	for i, line := range lines {
-		first := firstNonSpaceByte(line)
-
-		if inBlock {
-			if first != fenceMarker[0] {
-				continue
-			}
-			if IsClosingFence(strings.TrimSpace(line), fenceMarker) {
-				inBlock = false
-				fenceMarker = ""
-			}
+	for i := 0; i < ctx.Len(); i++ {
+		if inBlockContext(ctx, i) {
 			continue
 		}
 
-		if first == '`' || first == '~' {
-			if marker := openingFenceMarker(strings.TrimSpace(line)); marker != "" {
-				inBlock = true
-				fenceMarker = marker
-				continue
-			}
-		}
-
+		line := ctx.Sanitized(i)
 		if !strings.Contains(line, "](") {
 			continue
 		}
 
-		scanned := line
-		if strings.ContainsRune(line, '`') {
-			scanned = stripInlineCode(line)
-		}
-
-		for _, match := range findEmptyLinks(scanned) {
+		for _, match := range findEmptyLinks(line) {
 			errs = append(errs, LintError{
 				File:    filename,
 				Line:    offset + i + 1,

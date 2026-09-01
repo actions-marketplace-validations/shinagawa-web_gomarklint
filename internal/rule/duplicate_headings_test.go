@@ -3,6 +3,8 @@ package rule
 import (
 	"strings"
 	"testing"
+
+	"github.com/shinagawa-web/gomarklint/v3/internal/preprocess"
 )
 
 func TestCheckDuplicateHeadings(t *testing.T) {
@@ -54,12 +56,27 @@ func TestCheckDuplicateHeadings(t *testing.T) {
 				{File: "test.md", Line: 5, Message: `duplicate heading: "intro"`},
 			},
 		},
+		{
+			name:     "hash inside fenced code block is ignored",
+			content:  "## Full source\n\n```rust\n#[tokio::main]\nasync fn main() {}\n```\n\n## Closer look\n\n```rust\n#[tokio::main]\nasync fn main() {}\n```",
+			wantErrs: nil,
+		},
+		{
+			name:     "hash inside tilde fenced code block is ignored",
+			content:  "## Section A\n\n~~~python\n# comment\n~~~\n\n## Section B\n\n~~~python\n# comment\n~~~",
+			wantErrs: nil,
+		},
+		{
+			name:     "non-ATX hash (no space after #) is not a heading",
+			content:  "#hashtag\nSome text\n#hashtag",
+			wantErrs: nil,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lines := strings.Split(tt.content, "\n")
-			got := CheckDuplicateHeadings("test.md", lines, 0)
+			got := CheckDuplicateHeadings("test.md", preprocess.Scan(lines), 0)
 
 			if len(got) != len(tt.wantErrs) {
 				t.Fatalf("got %d errors, want %d\nGot: %v\nWant: %v", len(got), len(tt.wantErrs), got, tt.wantErrs)

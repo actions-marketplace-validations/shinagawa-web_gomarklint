@@ -15,13 +15,13 @@ jobs:
 
     steps:
       - name: Checkout PR branch
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0  # Fetch all history for comparison
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -30,10 +30,24 @@ jobs:
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20240604174448-3b48cf0e0164
 
       - name: Run benchmarks on PR branch
-        run: make bench | tee new-bench.txt
+        run: make bench BENCH_COUNT=6 | tee new-bench.txt
 
-      - name: Save benchmark script from PR branch
-        run: cp .github/scripts/format-benchmark.sh /tmp/format-benchmark.sh
+      - name: Profile benchmarks on PR branch
+        run: |
+          mkdir -p profiles
+          grep '^Benchmark' new-bench.txt | awk '{print $1}' | sed 's/-[0-9]*$//' | sort -u > profiles/bench-names.txt
+          while IFS= read -r bench; do
+            go test -bench="^${bench}$" -benchmem -count=1 \
+              -cpuprofile="profiles/new-${bench}.prof" \
+              -o "profiles/new-${bench}.test" \
+              -run=^$ ./cmd/ > /dev/null 2>&1 || true
+          done < profiles/bench-names.txt
+
+      - name: Save benchmark script and Makefile from PR branch
+        run: |
+          cp .github/scripts/format-benchmark.sh /tmp/format-benchmark.sh
+          cp .github/scripts/format-profile-delta.sh /tmp/format-profile-delta.sh
+          cp Makefile /tmp/Makefile
 
       - name: Checkout main branch
         run: |
@@ -44,23 +58,42 @@ jobs:
         run: go mod download
 
       - name: Run benchmarks on main branch
-        run: make bench | tee old-bench.txt
+        run: make -f /tmp/Makefile bench BENCH_COUNT=6 | tee old-bench.txt
+
+      - name: Profile benchmarks on main branch
+        run: |
+          while IFS= read -r bench; do
+            go test -bench="^${bench}$" -benchmem -count=1 \
+              -cpuprofile="profiles/old-${bench}.prof" \
+              -o "profiles/old-${bench}.test" \
+              -run=^$ ./cmd/ > /dev/null 2>&1 || true
+          done < profiles/bench-names.txt
+
+      - name: Collect environment info
+        id: env_info
+        run: |
+          VCPU=$(nproc)
+          RAM_GB=$(awk '/MemTotal/ { printf "%d", $2/1024/1024 }' /proc/meminfo)
+          CPU_MODEL=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)
+          GO_VERSION=$(go version | awk '{print $3}' | sed 's/^go//')
+          echo "value=ubuntu-latest (${VCPU} vCPU, ${RAM_GB} GB RAM) · CPU: ${CPU_MODEL} · Go: ${GO_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Compare benchmarks
         id: benchmark_comparison
+        env:
+          ENV_INFO: ${{ steps.env_info.outputs.value }}
         run: |
           {
             echo "## Benchmark Comparison"
             echo ""
             echo "Comparing PR branch against main branch:"
             echo ""
-            echo "**Legend**: ✅ OK (no change or faster) | ⚠️ Caution (+10~50% slower) | ❌ Regression (+50%+ slower)"
+            echo "**Legend**: ✅ OK (≤0% or no change) | ⚠️ Caution (+10~50%) | ❌ Regression (+50%+)"
             echo ""
-            echo '```'
             benchstat old-bench.txt new-bench.txt > raw-comparison.txt || true
-            bash /tmp/format-benchmark.sh raw-comparison.txt formatted-comparison.txt
+            bash /tmp/format-benchmark.sh raw-comparison.txt formatted-comparison.txt "$ENV_INFO" new-bench.txt
             cat formatted-comparison.txt
-            echo '```'
+            bash /tmp/format-profile-delta.sh formatted-comparison.txt profiles/
           } > comparison.txt
           cat comparison.txt
 
@@ -72,6 +105,7 @@ jobs:
             old-bench.txt
             new-bench.txt
             comparison.txt
+            profiles/
 
       - name: Comment PR with benchmark results
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0

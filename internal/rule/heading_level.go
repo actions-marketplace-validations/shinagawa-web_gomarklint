@@ -3,9 +3,10 @@ package rule
 import (
 	"fmt"
 	"strings"
+
+	"github.com/shinagawa-web/gomarklint/v3/internal/preprocess"
 )
 
-// LintError represents a single lint violation detected in a Markdown file.
 type LintError struct {
 	File     string `json:"file"`
 	Line     int    `json:"line"`
@@ -14,10 +15,6 @@ type LintError struct {
 	Severity string `json:"severity"`
 }
 
-// atxHeadingLevel returns the ATX heading level (1–6) if line begins with a
-// valid ATX heading marker, or 0 otherwise. A valid marker is one to six '#'
-// characters followed by a space, a tab, or end-of-string.
-// This replaces a regex match and allocates nothing.
 func atxHeadingLevel(line string) int {
 	level := 0
 	for level < len(line) && line[level] == '#' {
@@ -33,62 +30,24 @@ func atxHeadingLevel(line string) int {
 	return 0
 }
 
-// CheckHeadingLevels analyzes the heading structure of the given Markdown content
-// and reports any issues such as the first heading not starting at the specified minimum level
-// or heading levels that jump more than one level (e.g., from ## to ####).
-//
-// Parameters:
-//   - filename: the name of the file being checked (used in error reporting)
-//   - lines: the Markdown content split into lines (with frontmatter already removed)
-//   - offset: the line number offset due to frontmatter removal
-//   - minLevel: the expected minimum level for the first heading (e.g., 2 for ##)
-//
-// Returns:
-//   - A slice of LintError containing the line number and description of each detected issue.
-func CheckHeadingLevels(filename string, lines []string, offset int, minLevel int) []LintError {
+func CheckHeadingLevels(filename string, ctx *preprocess.Context, offset int, minLevel int) []LintError {
 	var errs []LintError
 
 	prevLevel := 0
-	inCodeBlock := false
-	var fenceMarker string
 
-	for i, line := range lines {
-		if len(line) == 0 {
+	for i := 0; i < ctx.Len(); i++ {
+		if inBlockContext(ctx, i) {
 			continue
 		}
 
-		// First-byte prefilter: skip lines that cannot start a fence or heading
-		// before calling strings.TrimSpace.
-		first := firstNonSpaceByte(line)
-
-		// Inline code-block tracking — avoids the O(n×k) isInCodeBlock lookup.
-		if inCodeBlock {
-			if first != fenceMarker[0] {
-				continue
-			}
-			trimmed := strings.TrimSpace(line)
-			if IsClosingFence(trimmed, fenceMarker) {
-				inCodeBlock = false
-				fenceMarker = ""
-			}
-			continue
-		}
-
-		if first != '#' && first != '`' && first != '~' {
+		line := ctx.Line(i)
+		// First-byte prefilter: skip lines that cannot start a heading before
+		// calling strings.TrimSpace.
+		if firstNonSpaceByte(line) != '#' {
 			continue
 		}
 
 		trimmed := strings.TrimSpace(line)
-
-		if marker := openingFenceMarker(trimmed); marker != "" {
-			inCodeBlock = true
-			fenceMarker = marker
-			continue
-		}
-
-		if first != '#' {
-			continue
-		}
 
 		// Pass trimmed so that CRLF '\r' and leading spaces are already removed.
 		currentLevel := atxHeadingLevel(trimmed)

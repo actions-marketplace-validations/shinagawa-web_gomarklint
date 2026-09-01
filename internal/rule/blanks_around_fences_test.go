@@ -3,6 +3,8 @@ package rule
 import (
 	"strings"
 	"testing"
+
+	"github.com/shinagawa-web/gomarklint/v3/internal/preprocess"
 )
 
 func TestCheckBlanksAroundFences(t *testing.T) {
@@ -121,12 +123,41 @@ func TestCheckBlanksAroundFences(t *testing.T) {
 			content:  "Use <br> for line breaks.\n\n```go\nfmt.Println()\n```\n\nDone.\n",
 			wantErrs: nil,
 		},
+		{
+			name:     "valid: single-line HTML comment preceded by blank is transparent",
+			content:  "Some text\n\n<!-- comment -->\n```go\ncode\n```\n\nMore text\n",
+			wantErrs: nil,
+		},
+		{
+			name:    "invalid: single-line HTML comment preceded by non-blank still triggers violation",
+			content: "Some text\n<!-- comment -->\n```go\ncode\n```\n\nMore text\n",
+			wantErrs: []LintError{
+				{File: "test.md", Line: 3, Message: "blanks-around-fences: fenced code block must be preceded by a blank line"},
+			},
+		},
+		{
+			name:     "valid: gomarklint disable-next-line comment preceded by blank is transparent",
+			content:  "Some text\n\n<!-- gomarklint-disable-next-line -->\n```go\ncode\n```\n\nMore text\n",
+			wantErrs: nil,
+		},
+		{
+			name:     "valid: multiple single-line HTML comments preceded by blank are all transparent",
+			content:  "Some text\n\n<!-- a -->\n<!-- b -->\n```go\ncode\n```\n\nMore text\n",
+			wantErrs: nil,
+		},
+		{
+			name:    "invalid: line with visible text and inline comment before fence triggers violation",
+			content: "Some text\n\ntext <!-- comment -->\n```go\ncode\n```\n\nMore text\n",
+			wantErrs: []LintError{
+				{File: "test.md", Line: 4, Message: "blanks-around-fences: fenced code block must be preceded by a blank line"},
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lines := strings.Split(tt.content, "\n")
-			got := CheckBlanksAroundFences("test.md", lines, tt.offset)
+			got := CheckBlanksAroundFences("test.md", preprocess.Scan(lines), tt.offset)
 
 			if len(got) != len(tt.wantErrs) {
 				t.Fatalf("got %d errors, want %d\ngot:  %v\nwant: %v", len(got), len(tt.wantErrs), got, tt.wantErrs)

@@ -1,83 +1,47 @@
 package rule
 
-import "strings"
+import (
+	"strings"
 
-// CheckBlanksAroundFences flags fenced code blocks that are not preceded or
-// followed by a blank line. Fences at the start or end of the file are exempt
-// from the respective check. Fences inside HTML comment blocks are ignored.
-func CheckBlanksAroundFences(filename string, lines []string, offset int) []LintError {
+	"github.com/shinagawa-web/gomarklint/v3/internal/preprocess"
+)
+
+func CheckBlanksAroundFences(filename string, ctx *preprocess.Context, offset int) []LintError {
 	var errs []LintError
-	inBlock := false
-	fenceMarker := ""
-	inHTMLComment := false
-	prevBlank := true
 
-	for i, line := range lines {
-		first := firstNonSpaceByte(line)
-		isBlank := first == 0
-
-		// HTML comment tracking only applies outside fenced code blocks;
-		// `<!--`-like content inside a fenced block is just code and must not
-		// interfere with detecting the closing fence.
-		if !inBlock && (inHTMLComment || strings.IndexByte(line, '<') >= 0) {
-			skip, stillInComment := stepHTMLComment(strings.TrimSpace(line), inHTMLComment)
-			if skip {
-				inHTMLComment = stillInComment
-				prevBlank = false
-				continue
-			}
+	for _, span := range ctx.FenceSpans() {
+		// Preceded by a blank line? Skip past transparent standalone comment
+		// lines to find the nearest visible line.
+		j := span.Start - 1
+		for j >= 0 && isTransparentComment(ctx, j) {
+			j--
+		}
+		if j >= 0 && firstNonSpaceByte(ctx.Line(j)) != 0 {
+			errs = append(errs, LintError{
+				File:    filename,
+				Line:    offset + span.Start + 1,
+				Message: "blanks-around-fences: fenced code block must be preceded by a blank line",
+			})
 		}
 
-		if inBlock {
-			if first == fenceMarker[0] && IsClosingFence(strings.TrimSpace(line), fenceMarker) {
-				inBlock = false
-				fenceMarker = ""
-				// closing fence: check the next line
-				if i+1 < len(lines) && firstNonSpaceByte(lines[i+1]) != 0 {
-					errs = append(errs, LintError{
-						File:    filename,
-						Line:    offset + i + 1,
-						Message: "blanks-around-fences: fenced code block must be followed by a blank line",
-					})
-				}
-			}
-			prevBlank = false
-			continue
+		// Followed by a blank line? Only closed fences have a line after them to
+		// check; an unclosed fence (End == -1) runs to EOF.
+		if span.End >= 0 && span.End+1 < ctx.Len() && firstNonSpaceByte(ctx.Line(span.End+1)) != 0 {
+			errs = append(errs, LintError{
+				File:    filename,
+				Line:    offset + span.End + 1,
+				Message: "blanks-around-fences: fenced code block must be followed by a blank line",
+			})
 		}
-
-		if marker := openingFenceMarker(strings.TrimSpace(line)); marker != "" {
-			inBlock = true
-			fenceMarker = marker
-			// opening fence: check the previous line
-			if i > 0 && !prevBlank {
-				errs = append(errs, LintError{
-					File:    filename,
-					Line:    offset + i + 1,
-					Message: "blanks-around-fences: fenced code block must be preceded by a blank line",
-				})
-			}
-			prevBlank = false
-			continue
-		}
-
-		prevBlank = isBlank
 	}
 
 	return errs
 }
 
-// stepHTMLComment advances the HTML-comment state machine for one line.
-// It returns (skip, inComment) where skip indicates the caller should
-// `continue` past this line, and inComment is the updated state.
-func stepHTMLComment(trimmed string, inComment bool) (bool, bool) {
-	if inComment {
-		if strings.Contains(trimmed, "-->") {
-			return true, false
-		}
-		return true, true
+func isTransparentComment(ctx *preprocess.Context, i int) bool {
+	if !ctx.InHTMLComment(i) {
+		return false
 	}
-	if strings.Contains(trimmed, "<!--") && !strings.Contains(trimmed, "-->") {
-		return true, true
-	}
-	return false, false
+	line := ctx.Line(i)
+	return strings.Contains(line, "<!--") && strings.Contains(line, "-->")
 }

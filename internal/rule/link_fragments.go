@@ -4,11 +4,10 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/shinagawa-web/gomarklint/v3/internal/preprocess"
 )
 
-// extractHeadingText extracts the plain text from an ATX heading line (e.g. ## Heading).
-// Returns the trimmed heading text and its level (1–6).
-// Returns "", 0 for lines that are not valid ATX headings.
 func extractHeadingText(line string) (string, int) {
 	if len(line) == 0 || line[0] != '#' {
 		return "", 0
@@ -30,45 +29,18 @@ func extractHeadingText(line string) (string, int) {
 	return strings.TrimSpace(rest[1:]), level
 }
 
-// reFragmentLink matches inline fragment links: [text](#fragment)
-// Capture group 1 is the fragment without the leading #.
 var reFragmentLink = regexp.MustCompile(`\[[^\]]*\]\(#([^)]+)\)`)
-
-// reRefLinkUsage matches reference-style link usage: [text][label]
-// Capture group 1 is the reference label.
 var reRefLinkUsage = regexp.MustCompile(`\[[^\]]*\]\[([^\]]+)\]`)
-
-// reRefDef matches reference link definitions that target a fragment: [label]: #fragment
-// Capture group 1 is the label; group 2 is the fragment without the leading #.
 var reRefDef = regexp.MustCompile(`^\s*\[([^\]]+)\]:\s+#(\S+)`)
-
-// reStripInlineImages matches inline images: ![alt](url)
-// Used to remove image syntax before fragment link detection to avoid false positives
-// from image fragments like ![alt](#fig-1).
 var reStripInlineImages = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
 
-// collectRefDefs returns a map from normalized reference label to fragment string (without #)
-// for all reference link definitions in lines that target a fragment destination.
-// Definitions inside fenced code blocks are excluded.
-func collectRefDefs(lines []string) map[string]string {
+func collectRefDefs(ctx *preprocess.Context) map[string]string {
 	defs := make(map[string]string)
-	inBlock := false
-	fenceMarker := ""
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if inBlock {
-			if IsClosingFence(trimmed, fenceMarker) {
-				inBlock = false
-				fenceMarker = ""
-			}
+	for i := 0; i < ctx.Len(); i++ {
+		if inBlockContext(ctx, i) {
 			continue
 		}
-		if marker := openingFenceMarker(trimmed); marker != "" {
-			inBlock = true
-			fenceMarker = marker
-			continue
-		}
-		// Reference definitions must start with optional whitespace then '['.
+		line := ctx.Line(i)
 		if !strings.HasPrefix(strings.TrimLeft(line, " \t"), "[") {
 			continue
 		}
@@ -83,32 +55,14 @@ func collectRefDefs(lines []string) map[string]string {
 	return defs
 }
 
-// collectHeadingSlugs returns the set of all valid fragment slugs computed from ATX headings
-// in lines. Headings inside fenced code blocks are excluded.
-// Duplicate headings produce suffixed slugs (-1, -2, …) following GitHub convention.
-func collectHeadingSlugs(lines []string, slugger func(string) string) map[string]struct{} {
+func collectHeadingSlugs(ctx *preprocess.Context, slugger func(string) string) map[string]struct{} {
 	var headings []string
 
-	inBlock := false
-	fenceMarker := ""
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		if inBlock {
-			if IsClosingFence(trimmed, fenceMarker) {
-				inBlock = false
-				fenceMarker = ""
-			}
+	for i := 0; i < ctx.Len(); i++ {
+		if inBlockContext(ctx, i) {
 			continue
 		}
-		if marker := openingFenceMarker(trimmed); marker != "" {
-			inBlock = true
-			fenceMarker = marker
-			continue
-		}
-
-		text, level := extractHeadingText(trimmed)
+		text, level := extractHeadingText(strings.TrimSpace(ctx.Line(i)))
 		if level == 0 {
 			continue
 		}
@@ -118,12 +72,12 @@ func collectHeadingSlugs(lines []string, slugger func(string) string) map[string
 	return buildSlugSet(headings, slugger)
 }
 
-// hasAnyFragmentSyntax is a cheap pre-filter that reports whether lines contain
-// any text that could be a fragment link or fragment definition, without
-// allocating any state. Checks for "(#" (inline fragment links) and
-// "]: #" (reference definition pointing at a fragment).
-func hasAnyFragmentSyntax(lines []string) bool {
-	for _, line := range lines {
+func hasAnyFragmentSyntax(ctx *preprocess.Context) bool {
+	for i := 0; i < ctx.Len(); i++ {
+		if inBlockContext(ctx, i) {
+			continue
+		}
+		line := ctx.Line(i)
 		if strings.Contains(line, "(#") || strings.Contains(line, "]: #") {
 			return true
 		}
@@ -131,11 +85,12 @@ func hasAnyFragmentSyntax(lines []string) bool {
 	return false
 }
 
-// hasAnyFragmentLinks reports whether lines contain at least one potential
-// fragment link. The check is intentionally coarse (no code-block awareness)
-// to stay O(n) with a single pass and minimal overhead.
-func hasAnyFragmentLinks(lines []string, refDefs map[string]string) bool {
-	for _, line := range lines {
+func hasAnyFragmentLinks(ctx *preprocess.Context, refDefs map[string]string) bool {
+	for i := 0; i < ctx.Len(); i++ {
+		if inBlockContext(ctx, i) {
+			continue
+		}
+		line := ctx.Line(i)
 		if strings.Contains(line, "(#") {
 			return true
 		}
@@ -146,7 +101,6 @@ func hasAnyFragmentLinks(lines []string, refDefs map[string]string) bool {
 	return false
 }
 
-// parseSlugAlgorithm extracts the slug-algorithm option, defaulting to "github".
 func parseSlugAlgorithm(options map[string]interface{}) string {
 	if v, ok := options["slug-algorithm"]; ok {
 		if s, ok := v.(string); ok && s != "" {
@@ -156,7 +110,6 @@ func parseSlugAlgorithm(options map[string]interface{}) string {
 	return "github"
 }
 
-// checkInlineFragments checks inline fragment links ([text](#frag)) on one line.
 func checkInlineFragments(filename string, lineNum int, scanned string, slugs map[string]struct{}) []LintError {
 	var errs []LintError
 	for _, m := range reFragmentLink.FindAllStringSubmatch(scanned, -1) {
@@ -172,7 +125,6 @@ func checkInlineFragments(filename string, lineNum int, scanned string, slugs ma
 	return errs
 }
 
-// checkRefFragments checks reference-style fragment links ([text][ref] with [ref]: #frag) on one line.
 func checkRefFragments(filename string, lineNum int, scanned string, slugs map[string]struct{}, refDefs map[string]string) []LintError {
 	var errs []LintError
 	for _, m := range reRefLinkUsage.FindAllStringSubmatch(scanned, -1) {
@@ -192,63 +144,36 @@ func checkRefFragments(filename string, lineNum int, scanned string, slugs map[s
 	return errs
 }
 
-// CheckLinkFragments validates that every internal fragment link in the document
-// resolves to an actual heading slug. Both inline links ([text](#frag)) and
-// reference links ([text][ref] + [ref]: #frag) are checked. Content inside fenced
-// code blocks and inline code spans is skipped.
-//
-// Supported options:
-//   - "slug-algorithm": string — preset name (github, gitlab, zenn, pandoc, pandoc-gfm,
-//     kramdown, mkdocs, docfx, hugo, qiita, mdbook, vitepress, gitea, forgejo, sphinx,
-//     eleventy, azure-devops, myst, docusaurus, gatsby, astro, starlight, nuxt-content,
-//     quarto) or "custom" (default: "github")
-//   - "slug-params": map — used only when slug-algorithm is "custom"; keys: lowercase (bool),
-//     preserve-unicode (bool), space-replacement (string), strip-chars (regex string),
-//     collapse-separators (bool)
-func CheckLinkFragments(filename string, lines []string, offset int, options map[string]interface{}) []LintError {
-	if !hasAnyFragmentSyntax(lines) {
+func CheckLinkFragments(filename string, ctx *preprocess.Context, offset int, options map[string]interface{}) []LintError {
+	if !hasAnyFragmentSyntax(ctx) {
 		return nil
 	}
-	refDefs := collectRefDefs(lines)
-	if !hasAnyFragmentLinks(lines, refDefs) {
+	refDefs := collectRefDefs(ctx)
+	if !hasAnyFragmentLinks(ctx, refDefs) {
 		return nil
 	}
 	algorithm := parseSlugAlgorithm(options)
-	slugs := collectHeadingSlugs(lines, makeSlugger(algorithm, options))
+	slugs := collectHeadingSlugs(ctx, makeSlugger(algorithm, options))
 
 	var errs []LintError
-	inBlock := false
-	fenceMarker := ""
 
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		if inBlock {
-			if IsClosingFence(trimmed, fenceMarker) {
-				inBlock = false
-				fenceMarker = ""
-			}
-			continue
-		}
-		if marker := openingFenceMarker(trimmed); marker != "" {
-			inBlock = true
-			fenceMarker = marker
+	for i := 0; i < ctx.Len(); i++ {
+		if inBlockContext(ctx, i) {
 			continue
 		}
 
-		// Fast path: skip lines with no potential fragment links.
-		hasInlineLink := strings.Contains(line, "(#")
-		hasRefLink := len(refDefs) > 0 && strings.Contains(line, "][")
-		if !hasInlineLink && !hasRefLink {
-			continue
-		}
-
-		scanned := line
+		// Sanitized blanks inline code spans (and inline comments); inline images
+		// are stripped separately so image fragments like ![alt](#fig) are not
+		// treated as broken links.
+		scanned := ctx.Sanitized(i)
 		if strings.ContainsRune(scanned, '!') {
 			scanned = reStripInlineImages.ReplaceAllString(scanned, "")
 		}
-		if strings.ContainsRune(scanned, '`') {
-			scanned = stripInlineCode(scanned)
+
+		hasInlineLink := strings.Contains(scanned, "(#")
+		hasRefLink := len(refDefs) > 0 && strings.Contains(scanned, "][")
+		if !hasInlineLink && !hasRefLink {
+			continue
 		}
 
 		lineNum := offset + i + 1

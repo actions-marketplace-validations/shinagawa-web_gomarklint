@@ -1,8 +1,11 @@
 package rule
 
-import "strings"
+import (
+	"strings"
 
-// isATXHeading reports whether s is an ATX-style heading (levels 1–6).
+	"github.com/shinagawa-web/gomarklint/v3/internal/preprocess"
+)
+
 func isATXHeading(s string) bool {
 	level := 0
 	for level < len(s) && s[level] == '#' {
@@ -14,25 +17,20 @@ func isATXHeading(s string) bool {
 	return level == len(s) || s[level] == ' ' || s[level] == '\t'
 }
 
-// CheckBlanksAroundHeadings flags ATX-style headings that are not preceded or
-// followed by a blank line. Headings at the start or end of the file are exempt
-// from the respective check. Headings inside fenced code blocks are ignored.
-func CheckBlanksAroundHeadings(filename string, lines []string, offset int) []LintError {
+func CheckBlanksAroundHeadings(filename string, ctx *preprocess.Context, offset int) []LintError {
 	var errs []LintError
-	inBlock := false
-	fenceMarker := ""
 	// prevBlank tracks whether the previous line was blank so we avoid a
 	// second TrimSpace call on lines[i-1] for every heading encountered.
 	// Initialized to true so the first line of the file is exempt.
 	prevBlank := true
 	prevWasHeading := false
 
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
+	for i := 0; i < ctx.Len(); i++ {
+		trimmed := strings.TrimSpace(ctx.Line(i))
 		isBlank := trimmed == ""
 
-		// Check "followed by blank" before the fence branches so a heading
-		// immediately followed by a fence opener is still flagged.
+		// Check "followed by blank" before the block skip so a heading
+		// immediately followed by a code/HTML block opener is still flagged.
 		if prevWasHeading && !isBlank {
 			errs = append(errs, LintError{
 				File:    filename,
@@ -41,19 +39,7 @@ func CheckBlanksAroundHeadings(filename string, lines []string, offset int) []Li
 			})
 		}
 
-		if inBlock {
-			if IsClosingFence(trimmed, fenceMarker) {
-				inBlock = false
-				fenceMarker = ""
-			}
-			prevBlank = false
-			prevWasHeading = false
-			continue
-		}
-
-		if marker := openingFenceMarker(trimmed); marker != "" {
-			inBlock = true
-			fenceMarker = marker
+		if inBlockContext(ctx, i) {
 			prevBlank = false
 			prevWasHeading = false
 			continue
